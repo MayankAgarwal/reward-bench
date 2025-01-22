@@ -104,6 +104,8 @@ class Args:
     """Save all results."""
     force_truncation: bool = False
     """Force truncation (for if model errors)."""
+    keep_original_roles: bool = False
+    """Keep original roles in the data instead of assigning user/assistant to odd/even turns"""
 
 
 def save_jsonl(save_filename: str, table: Dict[str, List[Union[int, float, str]]]):
@@ -151,7 +153,9 @@ def push_results_to_hub(args, results, accuracy=None):
     run_command = " ".join(["python"] + sys.argv)
 
     # Get package versions as a dictionary
-    package_versions = {package.key: package.version for package in pkg_resources.working_set}
+    package_versions = {
+        package.key: package.version for package in pkg_resources.working_set
+    }
 
     # If accuracy is provided, create a string adding it to the results
     if accuracy is not None:
@@ -228,7 +232,9 @@ def rewardbench(args: Args):
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
 
-    logger.info(f"Running reward model on {args.model} with chat template {args.chat_template}")
+    logger.info(
+        f"Running reward model on {args.model} with chat template {args.chat_template}"
+    )
     if args.trust_remote_code:
         logger.info("Loading model with Trust Remote Code")
 
@@ -236,7 +242,9 @@ def rewardbench(args: Args):
     if args.ref_model:
         is_dpo = True
         MODEL_CONFIGS = DPO_MODEL_CONFIG
-        assert args.model != args.ref_model, "policy and reference model should be different"
+        assert (
+            args.model != args.ref_model
+        ), "policy and reference model should be different"
         from trl.trainer.utils import DPODataCollatorWithPadding
 
         from rewardbench import DPOInference
@@ -275,13 +283,17 @@ def rewardbench(args: Args):
             or args.not_quantized
         ):
             quantized = False
-            logger.info(f"Disabling quantization for llama-3 or override flag (--not_quantized: {args.not_quantized})")
+            logger.info(
+                f"Disabling quantization for llama-3 or override flag (--not_quantized: {args.not_quantized})"
+            )
         custom_dialogue = config["custom_dialogue"]
         pipeline_builder = config["pipeline_builder"]
         _ = config["model_type"]
         torch_dtype = config.get("torch_dtype", None)
         if custom_dialogue:
-            raise NotImplementedError("Custom dialogue not implemented yet for simpler data formatting.")
+            raise NotImplementedError(
+                "Custom dialogue not implemented yet for simpler data formatting."
+            )
 
     model_builder = config["model_builder"]
 
@@ -326,6 +338,7 @@ def rewardbench(args: Args):
             tokenizer=tokenizer,
             conv=conv,
             prioritize_instructions=args.prioritize_scoring,
+            keep_original_role=args.keep_original_roles,
         )
 
     # check if "chosen" and "rejected" in the dataset features
@@ -338,7 +351,11 @@ def rewardbench(args: Args):
         dataset = dataset.select(range(10))
 
     # Move extra columns to extra metadata (merged later)
-    keep_columns = ["prompt", "text_chosen", "text_rejected"] if is_preference_ranking else ["prompt", "text"]
+    keep_columns = (
+        ["prompt", "text_chosen", "text_rejected"]
+        if is_preference_ranking
+        else ["prompt", "text"]
+    )
     all_cols = dataset.column_names
     metadata = dataset.remove_columns(keep_columns)
     dataset = dataset.remove_columns([c for c in all_cols if c not in keep_columns])
@@ -351,7 +368,9 @@ def rewardbench(args: Args):
     if is_dpo:
         # if not preference data, raise NotImplementedError (only implemented for pairwise)
         if not is_preference_ranking:
-            raise NotImplementedError("DPO only implemented for pairwise preference data.")
+            raise NotImplementedError(
+                "DPO only implemented for pairwise preference data."
+            )
         tokenizer.pad_token = tokenizer.eos_token
         # if no BOS token, set as pad token, e.g. QWEN models
         if tokenizer.bos_token is None:
@@ -439,7 +458,10 @@ def rewardbench(args: Args):
             model_kwargs["attn_implementation"] = args.attn_implementation
 
         model = model_builder(
-            args.model, **model_kwargs, revision=args.revision, trust_remote_code=args.trust_remote_code
+            args.model,
+            **model_kwargs,
+            revision=args.revision,
+            trust_remote_code=args.trust_remote_code,
         )
         reward_pipe = pipeline_builder(
             "text-classification",  # often not used
@@ -485,8 +507,12 @@ def rewardbench(args: Args):
             if is_dpo:
                 rewards_chosen, rewards_rejected = dpo.inference_step(batch)
             else:
-                rewards_chosen = reward_pipe(batch["text_chosen"], **reward_pipeline_kwargs)
-                rewards_rejected = reward_pipe(batch["text_rejected"], **reward_pipeline_kwargs)
+                rewards_chosen = reward_pipe(
+                    batch["text_chosen"], **reward_pipeline_kwargs
+                )
+                rewards_rejected = reward_pipe(
+                    batch["text_rejected"], **reward_pipeline_kwargs
+                )
 
             # for each item in batch, record 1 if chosen > rejected
             # extra score from dict within batched results (e.g. logits)
@@ -525,7 +551,9 @@ def rewardbench(args: Args):
         return data
 
     combined_data = {
-        "prompt": dataset["prompt"],  # Assuming `prompts` is a list of prompts matching scores
+        "prompt": dataset[
+            "prompt"
+        ],  # Assuming `prompts` is a list of prompts matching scores
         "results": unwrap_if_list_of_lists(results),
     }
 
@@ -559,9 +587,15 @@ def rewardbench(args: Args):
         logger.info(f"Results: {accuracy}, on {len(results)} prompts")
 
         # compute mean and std of scores, chosen and rejected, then margin between them
-        logger.info(f"Mean chosen: {np.mean(scores_chosen)}, std: {np.std(scores_chosen)}")
-        logger.info(f"Mean rejected: {np.mean(scores_rejected)}, std: {np.std(scores_rejected)}")
-        logger.info(f"Mean margin: {np.mean(np.array(scores_chosen) - np.array(scores_rejected))}")
+        logger.info(
+            f"Mean chosen: {np.mean(scores_chosen)}, std: {np.std(scores_chosen)}"
+        )
+        logger.info(
+            f"Mean rejected: {np.mean(scores_rejected)}, std: {np.std(scores_rejected)}"
+        )
+        logger.info(
+            f"Mean margin: {np.mean(np.array(scores_chosen) - np.array(scores_rejected))}"
+        )
 
         if args.dataset == "allenai/reward-bench":
             out_dataset = dataset.add_column("results", results)
@@ -576,10 +610,14 @@ def rewardbench(args: Args):
                 subset_dataset = out_dataset[out_dataset["subsets"] == subset]
                 num_correct = sum(subset_dataset["results"])
                 num_total = len(subset_dataset["results"])
-                logger.info(f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})")
+                logger.info(
+                    f"{subset}: {num_correct}/{num_total} ({num_correct/num_total})"
+                )
                 results_grouped[subset] = num_correct / num_total
 
-            results_section = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped)
+            results_section = calculate_scores_per_section(
+                EXAMPLE_COUNTS, SUBSET_MAPPING, results_grouped
+            )
             logger.info(f"Results: {results_section}")
 
         ############################
@@ -601,7 +639,9 @@ def rewardbench(args: Args):
             "ref_model": args.ref_model,
             "tokenizer": tokenizer_path,
             "chat_template": args.chat_template,
-            "extra_results": results_grouped if args.dataset == "allenai/reward-bench" else None,
+            "extra_results": (
+                results_grouped if args.dataset == "allenai/reward-bench" else None
+            ),
         }
         with open(output_path, "w") as f:
             json.dump(final_results, f)
@@ -640,7 +680,9 @@ def rewardbench(args: Args):
                         EvalResult(
                             task_type="preference_evaluation",
                             dataset_type=args.dataset,
-                            dataset_name=args.dataset.split("/")[-1],  # Assuming dataset ID is like 'owner/dataset'
+                            dataset_name=args.dataset.split("/")[
+                                -1
+                            ],  # Assuming dataset ID is like 'owner/dataset'
                             metric_type="accuracy",
                             metric_value=accuracy,
                         )
@@ -650,7 +692,9 @@ def rewardbench(args: Args):
                 # If there are extra results (per subset), add them as separate EvalResults
                 if args.dataset == "allenai/reward-bench" and results_grouped:
                     for section, section_accuracy in results_section.items():
-                        print(f"Adding section {section} with accuracy {section_accuracy}")
+                        print(
+                            f"Adding section {section} with accuracy {section_accuracy}"
+                        )
                         section_eval = EvalResult(
                             task_type="preference_evaluation",
                             dataset_type=section.replace(" ", "_"),
@@ -679,12 +723,18 @@ def rewardbench(args: Args):
 
                 # Push the updated ModelCard to the Hugging Face Hub
                 card.push_to_hub(
-                    args.model, revision=args.revision, commit_message="Update evaluation results via RewardBench"
+                    args.model,
+                    revision=args.revision,
+                    commit_message="Update evaluation results via RewardBench",
                 )
-                logger.info(f"Successfully pushed updated ModelCard to Hugging Face Hub for {args.model}")
+                logger.info(
+                    f"Successfully pushed updated ModelCard to Hugging Face Hub for {args.model}"
+                )
             except Exception as e:
                 logger.error(f"Failed to upload metadata to Hugging Face Hub: {e}")
-                logger.info("(The most common issue is a model you do not have write permissions on).")
+                logger.info(
+                    "(The most common issue is a model you do not have write permissions on)."
+                )
     else:
         accuracy = None
 
@@ -693,7 +743,9 @@ def rewardbench(args: Args):
     ############################
     if args.push_results_to_hub:
         hf_repo = push_results_to_hub(args, combined_data, accuracy=accuracy)
-        logger.info(f"Pushed results to Hugging Face Hub for https://huggingface.co/datasets/{hf_repo}")
+        logger.info(
+            f"Pushed results to Hugging Face Hub for https://huggingface.co/datasets/{hf_repo}"
+        )
 
 
 if __name__ == "__main__":

@@ -30,7 +30,9 @@ from rewardbench.models import REWARD_MODEL_CONFIG
 # HuggingFace Hub locations
 CORE_EVAL_SET = "allenai/reward-bench"
 EXTRA_PREF_SETS = "allenai/pref-test-sets"
-BON_CANDIDATES = "ai2-adapt-dev/HERM_BoN_candidates"  # private until officially supported
+BON_CANDIDATES = (
+    "ai2-adapt-dev/HERM_BoN_candidates"  # private until officially supported
+)
 EVAL_REPO = "allenai/reward-bench-results"  # data repo to upload results
 
 # get token from HF_TOKEN env variable, but if it doesn't exist pass none
@@ -110,7 +112,9 @@ def save_to_hub(
         # ai2 internal visualization, not needed externally, global path intentional.
         dirname = os.path.dirname("/output/metrics.json")
         os.makedirs(dirname, exist_ok=True)  # redundant in Beaker code
-        with open("/output/metrics.json", "w+") as f:  # save format for AI2 beaker to show results
+        with open(
+            "/output/metrics.json", "w+"
+        ) as f:  # save format for AI2 beaker to show results
             json.dump(results_dict, f)
 
     dirname = os.path.dirname(scores_path)
@@ -122,7 +126,9 @@ def save_to_hub(
 
     with open(scores_path, "w") as f:
         if isinstance(results_dict, Dict):
-            dumped = json.dumps(results_dict, indent=4, sort_keys=True)  # nol removed , default=str
+            dumped = json.dumps(
+                results_dict, indent=4, sort_keys=True
+            )  # nol removed , default=str
             f.write(dumped)
         # else, dump each row in list
         else:
@@ -134,7 +140,9 @@ def save_to_hub(
         scores_url = api.upload_file(
             path_or_fileobj=scores_path,
             path_in_repo=target_path + f"{model_name}.json",
-            repo_id=EVAL_REPO if not debug else "ai2-adapt-dev/herm-debug",  # push to correct results repo
+            repo_id=(
+                EVAL_REPO if not debug else "ai2-adapt-dev/herm-debug"
+            ),  # push to correct results repo
             repo_type="dataset",
             commit_message=f"Add chosen-rejected text with scores for  model {model_name}",
         )
@@ -145,8 +153,12 @@ def save_to_hub(
 
 def map_conversations_testsets(example):
     prompt = example["prompt"]
-    example["text_chosen"] = prompt + [{"role": "assistant", "content": example["chosen"]}]
-    example["text_rejected"] = prompt + [{"role": "assistant", "content": example["rejected"]}]
+    example["text_chosen"] = prompt + [
+        {"role": "assistant", "content": example["chosen"]}
+    ]
+    example["text_rejected"] = prompt + [
+        {"role": "assistant", "content": example["rejected"]}
+    ]
     return example
 
 
@@ -158,6 +170,7 @@ def load_and_process_dataset(
     tokenizer: PreTrainedTokenizer = None,
     logger: logging.Logger = None,
     prioritize_instructions: bool = False,
+    keep_original_roles: bool = False,
 ) -> Dataset:
     """
     Load a preference dataset or an instruction dataset from the datasets library.
@@ -206,7 +219,9 @@ def load_and_process_dataset(
     features = dataset.features
 
     # Determine if it's preference data or instruction data
-    has_preference_data = "chosen" in dataset.column_names and "rejected" in dataset.column_names
+    has_preference_data = (
+        "chosen" in dataset.column_names and "rejected" in dataset.column_names
+    )
     has_instruction_data = "messages" in dataset.column_names
 
     # Decide which processing to use based on the prioritize_instructions flag
@@ -241,7 +256,9 @@ def load_and_process_dataset(
         return example
 
     if is_preference_data:
-        if "prompt" not in dataset.column_names or not isinstance(features["prompt"], list):
+        if "prompt" not in dataset.column_names or not isinstance(
+            features["prompt"], list
+        ):
             dataset = dataset.map(
                 process_preference_data,
                 num_proc=8,
@@ -257,14 +274,20 @@ def load_and_process_dataset(
     # Tokenize the data
     usable_tokenizer = check_tokenizer_chat_template(tokenizer)
 
-    assert conv is not None or usable_tokenizer, "Either conv or a tokenizer with a chat template must be provided."
+    assert (
+        conv is not None or usable_tokenizer
+    ), "Either conv or a tokenizer with a chat template must be provided."
 
     if usable_tokenizer:
         if logger is not None:
             logger.info("*** Preparing dataset with HF Transformers ***")
         dataset = dataset.map(
             prepare_dialogue_from_tokenizer,
-            fn_kwargs={"tokenizer": tokenizer, "ift": not is_preference_data},
+            fn_kwargs={
+                "tokenizer": tokenizer,
+                "ift": not is_preference_data,
+                "keep_original_roles": keep_original_roles,
+            },
             num_proc=8,
             load_from_cache_file=False,
         )
@@ -273,7 +296,10 @@ def load_and_process_dataset(
             logger.info("*** Preparing dataset with FastChat ***")
         dataset = dataset.map(
             prepare_dialogue,
-            fn_kwargs={"dialogue_template": conv, "ift": not is_preference_data},
+            fn_kwargs={
+                "dialogue_template": conv,
+                "ift": not is_preference_data,
+            },
             num_proc=8,
             load_from_cache_file=False,
         )
@@ -322,7 +348,9 @@ def load_eval_dataset(
                 subdataset = subdataset.rename_column("subset", "subsubset")
 
             # Add a new column 'subset' to the dataset with the subset name
-            subdataset = subdataset.add_column("subset", [subset_name] * len(subdataset))
+            subdataset = subdataset.add_column(
+                "subset", [subset_name] * len(subdataset)
+            )
 
             # Append the modified dataset to the list
             # remove pku_safer and pku_better from the dict, no longer part of the benchmark
@@ -376,8 +404,12 @@ def load_eval_dataset(
                 ]
             else:
                 prompt = example["prompt"]
-                example["text_chosen"] = prompt + [{"role": "assistant", "content": example["chosen"]}]
-                example["text_rejected"] = prompt + [{"role": "assistant", "content": example["rejected"]}]
+                example["text_chosen"] = prompt + [
+                    {"role": "assistant", "content": example["chosen"]}
+                ]
+                example["text_rejected"] = prompt + [
+                    {"role": "assistant", "content": example["rejected"]}
+                ]
             return example
 
         dataset = raw_dataset.map(
@@ -421,7 +453,9 @@ def load_bon_dataset(
 
     alpaca_eval = load_dataset("ai2-adapt-dev/HERM_BoN_candidates", "alpaca_eval")
     mt_bench = load_dataset("ai2-adapt-dev/HERM_BoN_candidates", "mt_bench")
-    merged_alpaca_eval = concatenate_datasets([alpaca_eval["zephyr"], alpaca_eval["tulu"]])
+    merged_alpaca_eval = concatenate_datasets(
+        [alpaca_eval["zephyr"], alpaca_eval["tulu"]]
+    )
     merged_mt_bench = concatenate_datasets([mt_bench["zephyr"], mt_bench["tulu"]])
 
     # add column "subset" alpaca_eval
@@ -432,7 +466,9 @@ def load_bon_dataset(
     merged_alpaca_eval = merged_alpaca_eval.rename_column("dataset", "dataset_details")
     merged_mt_bench = merged_mt_bench.rename_column("category", "dataset_details")
     # convert alpaca eval id to int
-    merged_alpaca_eval = merged_alpaca_eval.cast_column("id", Value(dtype="int64", id=None))
+    merged_alpaca_eval = merged_alpaca_eval.cast_column(
+        "id", Value(dtype="int64", id=None)
+    )
 
     # rename generator to model
     merged_alpaca_eval = merged_alpaca_eval.rename_column("generator", "model")
@@ -443,7 +479,9 @@ def load_bon_dataset(
     merged_mt_bench = merged_mt_bench.rename_column("instruction", "prompt")
 
     # add column "subset" mt_bench
-    merged_mt_bench = merged_mt_bench.add_column("subset", ["mt_bench" for i in range(len(merged_mt_bench))])
+    merged_mt_bench = merged_mt_bench.add_column(
+        "subset", ["mt_bench" for i in range(len(merged_mt_bench))]
+    )
 
     # remove question_id
     merged_mt_bench = merged_mt_bench.remove_columns("question_id")
@@ -531,6 +569,7 @@ def prepare_dialogue_from_tokenizer(
     example: Dict[str, Any],
     tokenizer: PreTrainedTokenizer,
     ift: bool = False,
+    keep_original_roles: bool = False,
 ) -> Dict[str, Any]:
     if all(k in example.keys() for k in ("chosen", "rejected")):
         # multi turn
@@ -539,11 +578,15 @@ def prepare_dialogue_from_tokenizer(
             messages = []
             for i, (line) in enumerate(example["prompt"]):
                 p = line["content"]
-                _ = line["role"]
-                if (i + 1) % 2 == 1:
-                    messages.append({"role": "user", "content": p})
+                r = line["role"]
+
+                if keep_original_roles:
+                    messages.append({"role": r, "content": p})
                 else:
-                    messages.append({"role": "assistant", "content": p})
+                    if (i + 1) % 2 == 1:
+                        messages.append({"role": "user", "content": p})
+                    else:
+                        messages.append({"role": "assistant", "content": p})
             # assert that the last message before this is user
             assert messages[-1]["role"] == "user"
 
@@ -639,10 +682,15 @@ def prepare_dialogue(
             temp_prompt = dialogue_template.get_prompt()
 
             # end with chosen/rejected
-            dialogue_template.messages.append([dialogue_template.roles[1], example["chosen"]])
+            dialogue_template.messages.append(
+                [dialogue_template.roles[1], example["chosen"]]
+            )
             example["text_chosen"] = dialogue_template.get_prompt()
 
-            dialogue_template.messages[-1] = [dialogue_template.roles[1], example["rejected"]]
+            dialogue_template.messages[-1] = [
+                dialogue_template.roles[1],
+                example["rejected"],
+            ]
             example["text_rejected"] = dialogue_template.get_prompt()
 
             example["prompt"] = temp_prompt
@@ -688,7 +736,11 @@ def prepare_dialogue(
             # ]
             dialogue_template.messages = []
             for i, line in enumerate(example["messages"]):
-                role = dialogue_template.roles[0] if i % 2 == 0 else dialogue_template.roles[1]
+                role = (
+                    dialogue_template.roles[0]
+                    if i % 2 == 0
+                    else dialogue_template.roles[1]
+                )
                 dialogue_template.messages.append([role, line["content"]])
         else:
             dialogue_template.messages = [
