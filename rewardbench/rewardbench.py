@@ -338,7 +338,7 @@ def rewardbench(args: Args):
             tokenizer=tokenizer,
             conv=conv,
             prioritize_instructions=args.prioritize_scoring,
-            keep_original_role=args.keep_original_roles,
+            keep_original_roles=args.keep_original_roles,
         )
 
     # check if "chosen" and "rejected" in the dataset features
