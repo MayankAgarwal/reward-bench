@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from typing import List, Optional
+
 import torch
 import torch.nn as nn
-from transformers import LlamaPreTrainedModel, LlamaModel
+from transformers import LlamaModel, LlamaPreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast
 
 
@@ -25,9 +26,7 @@ class INFORMForSequenceClassification(LlamaPreTrainedModel):
         self.num_labels = config.num_labels
         self.model = LlamaModel(config)
         self.score = nn.Sequential(
-            nn.Linear(config.hidden_size, config.hidden_size),
-            nn.ReLU(),
-            nn.Linear(config.hidden_size, 1)
+            nn.Linear(config.hidden_size, config.hidden_size), nn.ReLU(), nn.Linear(config.hidden_size, 1)
         )
 
         # Initialize weights and apply final processing
