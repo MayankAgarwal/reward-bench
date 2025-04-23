@@ -451,7 +451,7 @@ def load_and_process_FC_dataset(
     def process_preference_data(example):
         chosen_conv = example["chosen"]["conversation"]
         rejected_conv = example["rejected"]["conversation"]
-        tool_catalog = json.loads(example["chosen"]["tools"])
+        tool_catalog = example["chosen"]["tools"]
 
         example["prompt"] = chosen_conv[:-1]
         example["tool_catalog"] = tool_catalog
@@ -492,7 +492,7 @@ def load_and_process_FC_dataset(
         if logger is not None:
             logger.info("*** Preparing dataset with HF Transformers ***")
         dataset = dataset.map(
-            prepare_dialogue_from_tokenizer,
+            prepare_dialogue_from_tokenizer_FC,
             fn_kwargs={
                 "tokenizer": tokenizer,
                 "ift": not is_preference_data,
@@ -505,7 +505,7 @@ def load_and_process_FC_dataset(
         if logger is not None:
             logger.info("*** Preparing dataset with FastChat ***")
         dataset = dataset.map(
-            prepare_dialogue,
+            prepare_dialogue_FC,
             fn_kwargs={
                 "dialogue_template": conv,
                 "ift": not is_preference_data,
@@ -1146,7 +1146,7 @@ def prepare_dialogue_from_tokenizer_FC(
 ) -> Dict[str, Any]:
     if all(k in example.keys() for k in ("chosen", "rejected")):
 
-        tools = example["tool_catalog"]
+        tools = json.loads(example["tool_catalog"])
 
         # multi turn
         if isinstance(example["prompt"], list) and len(example["prompt"]) > 0:
@@ -1220,7 +1220,7 @@ def prepare_dialogue_from_tokenizer_FC(
             )
             example["prompt"] = temp_prompt
     elif ift:
-        tools = example["tool_catalog"]
+        tools = json.loads(example["tool_catalog"])
         if "messages" in example:
             messages = example["messages"]
         else:
