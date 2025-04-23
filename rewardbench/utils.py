@@ -95,6 +95,51 @@ def check_tokenizer_chat_template(tokenizer):
     return False
 
 
+def check_tokenizer_tool_template(tokenizer):
+    if not hasattr(tokenizer, "chat_template"):
+        return False
+
+    if tokenizer.chat_template is None:
+        return False
+
+    # Build prompt with and without tools defined
+    # If both prompts are the same, the chat template does not define tools
+    tools = [
+        {
+            "name": "multiply",
+            "description": "Multiply two numbers",
+            "parameters": {
+                "type": "dict",
+                "required": ["num1", "num2"],
+                "properties": {
+                    "num1": {
+                        "type": "float",
+                        "description": "First number",
+                    },
+                    "num2": {
+                        "type": "float",
+                        "description": "second number",
+                    },
+                },
+            },
+        }
+    ]
+
+    conv = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": "Hello! How can I help you?"},
+    ]
+
+    prompt_with_tools = tokenizer.apply_chat_template(
+        conversation=conv, tools=tools, tokenize=False
+    )
+    prompt_without_tools = tokenizer.apply_chat_template(
+        conversation=conv, tokenize=False
+    )
+
+    return prompt_with_tools != prompt_without_tools
+
+
 def save_to_hub(
     results_dict: Union[Dict, List],
     model_name: str,
@@ -286,6 +331,157 @@ def load_and_process_dataset(
 
     # Tokenize the data
     usable_tokenizer = check_tokenizer_chat_template(tokenizer)
+
+    assert (
+        conv is not None or usable_tokenizer
+    ), "Either conv or a tokenizer with a chat template must be provided."
+
+    if usable_tokenizer:
+        if logger is not None:
+            logger.info("*** Preparing dataset with HF Transformers ***")
+        dataset = dataset.map(
+            prepare_dialogue_from_tokenizer,
+            fn_kwargs={
+                "tokenizer": tokenizer,
+                "ift": not is_preference_data,
+                "keep_original_roles": keep_original_roles,
+            },
+            num_proc=8,
+            load_from_cache_file=False,
+        )
+    else:
+        if logger is not None:
+            logger.info("*** Preparing dataset with FastChat ***")
+        dataset = dataset.map(
+            prepare_dialogue,
+            fn_kwargs={
+                "dialogue_template": conv,
+                "ift": not is_preference_data,
+            },
+            num_proc=8,
+            load_from_cache_file=False,
+        )
+
+    return dataset
+
+
+def load_and_process_FC_dataset(
+    dataset_name: str,
+    split: str = "train",
+    json: bool = False,
+    conv: Conversation = None,
+    tokenizer: PreTrainedTokenizer = None,
+    logger: logging.Logger = None,
+    prioritize_instructions: bool = False,
+    keep_original_roles: bool = False,
+) -> Dataset:
+    """
+    Load a FC preference dataset or an instruction dataset from the datasets library.
+    Works for both preference datasets (with chosen/rejected) and SFT datasets (with messages).
+
+    Expects the data to follow one of these schemas:
+    1. Preference data:
+       - prompt (string): question
+       - chosen (list): all turns of the conversation (including the prompt), chosen answer
+       - rejected (list): all turns of the conversation (including the prompt), rejected answer
+    2. Instruction data:
+       - messages (list): all turns of the conversation
+
+    Removes all excess columns, only returns processed data in order.
+
+    Args:
+        dataset_name (str): The name of the dataset to load (HuggingFace or local directory)
+        split (str): The split of the dataset to load (train, validation, test, ...)
+        json (bool): Whether to load the dataset from a JSON file
+        conv (Conversation): FastChat conversation template
+        tokenizer (PreTrainedTokenizer): HuggingFace tokenizer
+        logger (logging.Logger): Logger object
+        prioritize_instructions (bool): If True, prioritize processing as instruction data when both types are present
+
+    Returns:
+        dataset (Dataset): The loaded dataset with prompt, text_chosen, and text_rejected columns for preference data,
+                           or prompt and response columns for instruction data.
+    """
+    if json:
+        dataset = load_dataset("json", data_files=dataset_name)
+    else:
+        dataset = load_dataset(dataset_name, split=split)
+
+    # if datasetdict, flatten all splits
+    if isinstance(dataset, DatasetDict):
+        available_splits = list(dataset.keys())
+        datasets_to_combine = [dataset[split] for split in available_splits]
+        dataset = concatenate_datasets(datasets_to_combine)
+
+    # Handle column renaming to track prompts
+    if "question" in dataset.column_names and "prompt" not in dataset.column_names:
+        dataset = dataset.rename_column("question", "prompt")
+    if "input" in dataset.column_names and "prompt" not in dataset.column_names:
+        dataset = dataset.rename_column("input", "prompt")
+
+    features = dataset.features
+
+    # Determine if it's preference data or instruction data
+    has_preference_data = (
+        "chosen" in dataset.column_names and "rejected" in dataset.column_names
+    )
+    has_instruction_data = "messages" in dataset.column_names
+
+    # Decide which processing to use based on the prioritize_instructions flag
+    if prioritize_instructions and has_instruction_data:
+        is_preference_data = False
+        if logger:
+            logger.info("Processing as instruction data (prioritized)")
+    elif has_preference_data:
+        is_preference_data = True
+        if logger:
+            logger.info("Processing as preference data")
+    elif has_instruction_data:
+        is_preference_data = False
+        if logger:
+            logger.info("Processing as instruction data")
+    else:
+        raise ValueError(
+            "Dataset format not recognized. It should contain either 'chosen' and 'rejected'"
+            " columns for preference data, or a 'messages' column for instruction data."
+        )
+
+    # Process the data for input to RM
+    def process_preference_data(example):
+        chosen_conv = example["chosen"]["conversation"]
+        rejected_conv = example["rejected"]["conversation"]
+        tool_catalog = json.loads(example["chosen"]["tools"])
+
+        example["prompt"] = chosen_conv[:-1]
+        example["tool_catalog"] = tool_catalog
+        example["chosen"] = chosen_conv[-1]["content"]
+        example["rejected"] = rejected_conv[-1]["content"]
+
+        return example
+
+    def process_instruction_data(example):
+        messages = example["messages"]
+        example["prompt"] = messages[0]["content"]
+        return example
+
+    if is_preference_data:
+        if "prompt" not in dataset.column_names or not isinstance(
+            features["prompt"], list
+        ):
+            dataset = dataset.map(
+                process_preference_data,
+                num_proc=8,
+                load_from_cache_file=False,
+            )
+    else:
+        dataset = dataset.map(
+            process_instruction_data,
+            num_proc=8,
+            load_from_cache_file=False,
+        )
+
+    # Tokenize the data
+    usable_tokenizer = check_tokenizer_tool_template(tokenizer)
 
     assert (
         conv is not None or usable_tokenizer
@@ -939,3 +1135,210 @@ def load_model_config(model_name):
         return REWARD_MODEL_CONFIG[model_name]
     else:
         return REWARD_MODEL_CONFIG["default"]
+
+
+def prepare_dialogue_from_tokenizer_FC(
+    example: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    ift: bool = False,
+    keep_original_roles: bool = False,
+) -> Dict[str, Any]:
+    if all(k in example.keys() for k in ("chosen", "rejected")):
+
+        tools = example["tool_catalog"]
+
+        # multi turn
+        if isinstance(example["prompt"], list) and len(example["prompt"]) > 0:
+            # iterate through prompt messages, alternate user and assistant, end with example["chosen"]/rejected
+            messages = []
+            for i, (line) in enumerate(example["prompt"]):
+                p = line["content"]
+                r = line["role"]
+
+                if keep_original_roles:
+                    messages.append({"role": r, "content": p})
+                else:
+                    if (i + 1) % 2 == 1:
+                        messages.append({"role": "user", "content": p})
+                    else:
+                        messages.append({"role": "assistant", "content": p})
+            # assert that the last message before this is user
+            assert messages[-1]["role"] == "user"
+
+            # required for DPO code only, otherwise discarded
+            temp_prompt = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+
+            # end with chosen/rejected
+            messages.append({"role": "assistant", "content": example["chosen"]})
+            example["text_chosen"] = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+
+            messages[-1] = {"role": "assistant", "content": example["rejected"]}
+            example["text_rejected"] = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+            example["prompt"] = temp_prompt
+        # single turn
+        else:
+            # needed for DPO
+            messages = [
+                {"role": "user", "content": example["prompt"]},
+            ]
+            temp_prompt = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+
+            messages = [
+                {"role": "user", "content": example["prompt"]},
+                {"role": "assistant", "content": example["chosen"]},
+            ]
+            example["text_chosen"] = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+            messages = [
+                {"role": "user", "content": example["prompt"]},
+                {"role": "assistant", "content": example["rejected"]},
+            ]
+            example["text_rejected"] = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+            )
+            example["prompt"] = temp_prompt
+    elif ift:
+        tools = example["tool_catalog"]
+        if "messages" in example:
+            messages = example["messages"]
+        else:
+            messages = [
+                {"role": "user", "content": example["prompt"]},
+                {"role": "assistant", "content": example["input"]},
+            ]
+        example["text"] = tokenizer.apply_chat_template(
+            messages,
+            tools=tools,
+            tokenize=False,
+        )
+    else:
+        raise ValueError(
+            "Could not format example as dialogue for `rm` task!"
+            f"Require `[chosen, rejected]` keys but found {list(example.keys())}"
+        )
+    return example
+
+
+def prepare_dialogue_FC(
+    example: Dict[str, Any],
+    dialogue_template: Conversation,
+    ift: bool = False,
+) -> Dict[str, Any]:
+    """Format example to single- or multi-turn dialogue."""
+
+    raise NotImplementedError
+
+    if all(k in example.keys() for k in ("chosen", "rejected")):
+        # multi turn
+        if isinstance(example["prompt"], list) and len(example["prompt"]) > 0:
+            # iterate through prompt messages, alternate user and assistant, end with example["chosen"]/rejected
+            dialogue_template.messages = []
+            for i, (line) in enumerate(example["prompt"]):
+                p = line["content"]
+                _ = line["role"]
+                if (i + 1) % 2 == 1:
+                    dialogue_template.messages.append([dialogue_template.roles[0], p])
+                else:
+                    dialogue_template.messages.append([dialogue_template.roles[1], p])
+            # assert that the last message before this is user
+            assert dialogue_template.messages[-1][0] == dialogue_template.roles[0]
+
+            # needed for DPO
+            temp_prompt = dialogue_template.get_prompt()
+
+            # end with chosen/rejected
+            dialogue_template.messages.append(
+                [dialogue_template.roles[1], example["chosen"]]
+            )
+            example["text_chosen"] = dialogue_template.get_prompt()
+
+            dialogue_template.messages[-1] = [
+                dialogue_template.roles[1],
+                example["rejected"],
+            ]
+            example["text_rejected"] = dialogue_template.get_prompt()
+
+            example["prompt"] = temp_prompt
+
+        # single turn
+        else:
+            if isinstance(example["prompt"], list):
+                example["prompt"] = example["prompt"][0]
+            dialogue_template.messages = [
+                [dialogue_template.roles[0], example["prompt"]],
+            ]
+            temp_prompt = dialogue_template.get_prompt()
+
+            dialogue_template.messages = [
+                [dialogue_template.roles[0], example["prompt"]],
+                [dialogue_template.roles[1], example["chosen"]],
+            ]
+            example["text_chosen"] = dialogue_template.get_prompt()
+            dialogue_template.messages = [
+                [dialogue_template.roles[0], example["prompt"]],
+                [dialogue_template.roles[1], example["rejected"]],
+            ]
+            example["text_rejected"] = dialogue_template.get_prompt()
+
+            example["prompt"] = temp_prompt
+    elif ift:
+        if isinstance(example["prompt"], list):
+            example["prompt"] = example["prompt"][0]
+
+        # get prompt
+        dialogue_template.messages = [
+            [dialogue_template.roles[0], example["prompt"]],
+        ]
+        temp_prompt = dialogue_template.get_prompt()
+
+        # get messages
+        if "messages" in example:
+            # convert to FastChat format (list of list)
+            # original format:
+            # [
+            #     {"role": "user", "content": example["prompt"]},
+            #     {"role": "assistant", "content": example["rejected"]},
+            # ]
+            dialogue_template.messages = []
+            for i, line in enumerate(example["messages"]):
+                role = (
+                    dialogue_template.roles[0]
+                    if i % 2 == 0
+                    else dialogue_template.roles[1]
+                )
+                dialogue_template.messages.append([role, line["content"]])
+        else:
+            dialogue_template.messages = [
+                [dialogue_template.roles[0], example["prompt"]],
+                [dialogue_template.roles[1], example["input"]],
+            ]
+        example["text"] = dialogue_template.get_prompt()
+        example["prompt"] = temp_prompt  # needed for DPO
+
+    else:
+        raise ValueError(
+            "Could not format example as dialogue for `rm` task!"
+            f"Require `[chosen, rejected]` keys but found {list(example.keys())}"
+        )
+    return example

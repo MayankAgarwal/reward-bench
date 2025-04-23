@@ -41,6 +41,7 @@ from rewardbench import (
     REWARD_MODEL_CONFIG,
     check_tokenizer_chat_template,
     load_and_process_dataset,
+    load_and_process_FC_dataset,
     torch_dtype_mapping,
 )
 
@@ -106,6 +107,9 @@ class Args:
     """Force truncation (for if model errors)."""
     keep_original_roles: bool = False
     """Keep original roles in the data instead of assigning user/assistant to odd/even turns"""
+
+    # function-calling args
+    is_fc_task: bool = False
 
 
 def save_jsonl(save_filename: str, table: Dict[str, List[Union[int, float, str]]]):
@@ -329,6 +333,17 @@ def rewardbench(args: Args):
             tokenizer=tokenizer,
             logger=logger,
             return_extra_data=True,
+        )
+    elif args.is_fc_task:
+        logger.info("Loading Function-Calling dataset")
+        dataset = load_and_process_FC_dataset(
+            args.dataset,
+            split=args.split,
+            json=args.load_json,
+            tokenizer=tokenizer,
+            conv=conv,
+            prioritize_instructions=args.prioritize_scoring,
+            keep_original_roles=args.keep_original_roles,
         )
     else:
         dataset = load_and_process_dataset(

@@ -19,6 +19,7 @@ from .models import DPO_MODEL_CONFIG, REWARD_MODEL_CONFIG
 from .utils import (
     check_tokenizer_chat_template,
     load_and_process_dataset,
+    load_and_process_FC_dataset,
     load_bon_dataset,
     load_bon_dataset_v2,
     load_eval_dataset,
