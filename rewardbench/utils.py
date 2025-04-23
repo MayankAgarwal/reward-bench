@@ -368,7 +368,7 @@ def load_and_process_dataset(
 def load_and_process_FC_dataset(
     dataset_name: str,
     split: str = "train",
-    json: bool = False,
+    json_format: bool = False,
     conv: Conversation = None,
     tokenizer: PreTrainedTokenizer = None,
     logger: logging.Logger = None,
@@ -402,7 +402,7 @@ def load_and_process_FC_dataset(
         dataset (Dataset): The loaded dataset with prompt, text_chosen, and text_rejected columns for preference data,
                            or prompt and response columns for instruction data.
     """
-    if json:
+    if json_format:
         dataset = load_dataset("json", data_files=dataset_name)
     else:
         dataset = load_from_disk(dataset_name)

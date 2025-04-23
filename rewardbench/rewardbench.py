@@ -339,7 +339,7 @@ def rewardbench(args: Args):
         dataset = load_and_process_FC_dataset(
             args.dataset,
             split=args.split,
-            json=args.load_json,
+            json_format=args.load_json,
             tokenizer=tokenizer,
             conv=conv,
             prioritize_instructions=args.prioritize_scoring,
