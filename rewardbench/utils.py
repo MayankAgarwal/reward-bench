@@ -405,7 +405,8 @@ def load_and_process_FC_dataset(
     if json:
         dataset = load_dataset("json", data_files=dataset_name)
     else:
-        dataset = load_dataset(dataset_name, split=split)
+        dataset = load_from_disk(dataset_name)
+        # dataset = load_dataset(dataset_name, split=split)
 
     # if datasetdict, flatten all splits
     if isinstance(dataset, DatasetDict):
