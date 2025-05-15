@@ -130,12 +130,18 @@ def check_tokenizer_tool_template(tokenizer):
         {"role": "assistant", "content": "Hello! How can I help you?"},
     ]
 
-    prompt_with_tools = tokenizer.apply_chat_template(
-        conversation=conv, tools=tools, tokenize=False
-    )
     prompt_without_tools = tokenizer.apply_chat_template(
         conversation=conv, tokenize=False
     )
+
+    try:
+        prompt_with_tools = tokenizer.apply_chat_template(
+            conversation=conv, tools=tools, tokenize=False
+        )
+    except:
+        # Sometimes the template raises an exception if it does not accept
+        # tools as input. Return False in this case
+        return False
 
     return prompt_with_tools != prompt_without_tools
 
@@ -427,9 +433,20 @@ def load_and_process_FC_dataset(
         "chosen" in dataset.column_names and "rejected" in dataset.column_names
     )
     has_instruction_data = "messages" in dataset.column_names
+    has_fc_format_data = (
+        "tools" in dataset.column_names
+        and "conversation" in dataset.column_names
+        and "chosen_output" in dataset.column_names
+        and "rejected_output" in dataset.column_names
+    )
 
     # Decide which processing to use based on the prioritize_instructions flag
-    if prioritize_instructions and has_instruction_data:
+    is_fc_data = False
+    if has_fc_format_data:
+        is_fc_data = True
+        if logger:
+            logger.info("Processing as function calling data")
+    elif prioritize_instructions and has_instruction_data:
         is_preference_data = False
         if logger:
             logger.info("Processing as instruction data (prioritized)")
@@ -465,7 +482,14 @@ def load_and_process_FC_dataset(
         example["prompt"] = messages[0]["content"]
         return example
 
-    if is_preference_data:
+    if is_fc_data:
+        dataset = (
+            dataset.rename_column("conversation", "prompt")
+            .rename_column("tools", "tool_catalog")
+            .rename_column("chosen_output", "chosen")
+            .rename_column("rejected_output", "rejected")
+        )
+    elif is_preference_data:
         if "prompt" not in dataset.column_names or not isinstance(
             features["prompt"], list
         ):
@@ -481,7 +505,7 @@ def load_and_process_FC_dataset(
             load_from_cache_file=False,
         )
 
-    # Tokenize the data
+    # Check if the tokenizer defines a tool calling template or not.
     usable_tokenizer = check_tokenizer_tool_template(tokenizer)
 
     assert (
@@ -491,6 +515,7 @@ def load_and_process_FC_dataset(
     if usable_tokenizer:
         if logger is not None:
             logger.info("*** Preparing dataset with HF Transformers ***")
+
         dataset = dataset.map(
             prepare_dialogue_from_tokenizer_FC,
             fn_kwargs={
